@@ -1,0 +1,246 @@
+---
+title: "ProteinDynamics_DimReduction"
+author: "Arshan Munif (2262291)"
+output:
+  word_document: default
+  html_document: default
+date: "2023-06-11"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## About the R Markdown
+
+This R Markdown file is designed to load and analyse protein trajectory data and conduct dimensionality reduction using PCA. To begin the user will read .pdb and .xtc files in this markdown
+
+```{r}
+# Get working directory
+# The .pdb and .xtc files need to be in this directory. If not, R will not be able to locate and read the files and produce errors.
+getwd()
+```
+
+### Load Libraries
+
+```{r}
+# Load necessary libraries
+library(bio3d)
+library(rioxdr)
+library(ggplot2)
+library(ggfortify)
+library(MASS)
+```
+
+
+### 1. Read trajectory and topology file, Select and extract C-alpha atoms, Reshape the data, Compute RMSD and PCA results
+
+```{r}
+# Source the functions
+source('trajectory_function.R')
+source('filter_CAlpha.R')
+source('Reshape_Data.R')
+source('extract_coords.R')
+source('RMSD.R')
+source('PCA_func.R')
+
+# Use the function to read trajectory(xtc) and topology (pdb) files
+trj_obj <- read_xtc("MD05_ADK_data/MD05_ADK_protein_fit_small.xtc", "MD05_ADK_data/MD05_ADK_protein.pdb")
+
+# Select c-alpha atoms
+inds <- select_calpha(trj_obj$pdb)
+
+# Extract c-alpha atom coordinates
+ca_coords <- extract_calpha_coords(trj_obj$trj, inds)
+
+
+# Reshape the data
+#reshaped_coords <- reshape_data(ca_coords, inds)
+reshaped_coords <- ca_reshape(ca_coords)
+
+
+# check the dimensions to ensure data prep and transformation were performed properly
+dim(ca_coords)
+dim(reshaped_coords)
+
+# Compute RMSD
+rmsd_values <- compute_rmsd(reshaped_coords)
+mean(rmsd_values)
+hist(rmsd_values)
+
+
+# Perform PCA using the PCA function
+pca_result <- perform_pca(reshaped_coords)
+plot(pca_result, col= 'orange', xlab = 'Principal Components', main = 'PCA Results Plot') # this plot will show the principal components in descending order of variance
+
+```
+
+
+### 2. Extract and plot principal components, compute explained variance, cumulative PVE, and visualise loadings
+
+```{r}
+# Extract principal components scores
+scores <- pca_result$x
+head(scores[,1:3]) # prints the first few lines for selected PCs
+tail(scores[,1:3]) # prints the last few lines for selected PCs
+plot(scores, main = 'PC Scores') # plot the scores
+
+# Generate color coded scores plot
+rgb.palette <- colorRampPalette(c("blue","green", "orange"), space = 'rgb')
+plot(scores[,1], scores[,2], pch = 20, col = rgb.palette(1000), xlab = 'PC1 Scores', ylab = 'PC2 Scores')
+
+# Generate kernel density map
+a = kde2d(scores[,1], scores[,2], n = 1000)
+image(a)
+
+# calculate proportion of variance explained (PVE) from std values
+pca_result_var <- pca_result$sdev^2
+cat("Variance for selected PCs:", pca_result_var[1:3], "\n")
+
+pca_result_PVE <- pca_result_var / sum(pca_result_var)
+cat("Explained variance (PVE) for selected PCs:", pca_result_PVE[1:3], "\n")
+
+
+# calculate cumulative value of PVE for increasing number of additional principal components
+cumul_var <- cumsum(pca_result_PVE)
+cat("Cumulative PVE for selected PCs:", cumul_var[1:3], "\n")
+
+
+# get and inspect loadings principal components
+pca_loadings <- pca_result$rotation
+cat("Loadings for the selected PCs:", pca_loadings[1:3], "\n")
+
+
+# plot the loadings for the PCs
+source('Loading_Plot.R') # call loading plot function
+selected_components <- c(1, 2, 3)
+plot_loadings(pca_loadings, selected_components)
+```
+
+### 3. Generate PVE plot and Identify the top principal components representing signa
+l
+```{r}
+# Call the PVE plot function
+source('PVE_Plot.R')
+
+# Generate plot with a 80% threshold line to inform feature extraction
+selected_components <- 5 # insert the desired number of PCs that you want to be visualised in the scree plot
+select_pc <- pve_plot(cumul_var, selected_components)
+
+# Print the number of components that explain 80% of variance
+cat('Selected number of components:', select_pc)
+```
+
+
+### 4. Generate Bi-plot
+
+```{r}
+library(factoextra)
+
+# call the biplot function
+source('biplot_func.R') 
+
+num_scores <- 1000  # Change this to the desired number of scores that needs to be shown
+subset_pca_result <- pca_result
+subset_pca_result$x <- pca_result$x[1:num_scores, ]
+
+# Call the pca_biplot function
+pca_biplot(subset_pca_result)
+
+# visualise the variables
+fviz_pca_var(pca_result, select.var = list(contrib = 100))
+```
+
+### 5. Project energy values on the PCA space
+
+```{r}
+# read the energy table
+energy <- read.table("/Users/arshanmunif/Documents/GitHub/MSRDimRed/MD05_small.energy")
+
+```
+
+```{r}
+# create a rgb colour coding function
+function (n) 
+{
+    x <- ramp(seq.int(0, 1, length.out = n))
+    if (ncol(x) == 4L) 
+        rgb(x[, 1L], x[, 2L], x[, 3L], x[, 4L], maxColorValue = 255)
+    else rgb(x[, 1L], x[, 2L], x[, 3L], maxColorValue = 255)
+}
+rgb.palette(1000)
+```
+
+```{r}
+# Generate a colour vector ordered by energy values
+col_vec <- rgb.palette(1000)[order(energy$V1)]
+
+# Define a custom colour palette
+rgb.palette <- colorRampPalette(c("blue","green", "orange"),space = 'rgb')
+
+# Generate colour coded energy projection plot
+plot(scores, col = col_vec, pch = 16, main = "Energy Projection on PCs")
+
+```
+
+### 6. Project RMSD Values on the PCA Space
+
+```{r}
+
+# Define a custom colour palette
+rgb.palette <- colorRampPalette(c("blue", "green", "orange"), space = 'rgb')
+
+# Generate a colour vector ordered by RMSD values
+col_vec_2 <- rgb.palette(length(rmsd_values))[order(rmsd_values)]
+
+# project the rmsd on PCA plot
+plot(scores, col = col_vec_2, pch = 16, main = "RMSD Values Projected on PCs")
+
+
+```
+
+### 7. Project atomic distances on the PCA space
+
+```{r}
+distance <- read.table("/Users/arshanmunif/Documents/GitHub/MSRDimRed/MD05_ADK_protein_fit_small.G55-P127.xvg", skip=17)
+names(distance) <- c("time", "distance")
+distance$col <- rgb(0,
+                    (
+                      (distance$distance - min(distance$distance)) / 
+                        (max(distance$distance) - min(distance$distance))),
+                     0)
+
+# geneate histogram to understand distribution
+hist(distance$distance, 100)
+hist(distance$distance, 1000)
+
+# assign colours to distinguish open and closed states of protein
+distance$open <- 'red' # red depicts closed protein state
+distance[distance$distance > 2.1, 'open'] <- 'blue' # blue depicts open protein state
+
+# check colour assignment by viewing the first 6 rows in the data frame
+head(distance)
+
+# generate plot with the distance values projected on the PCA space
+plot(scores, col = distance$open, pch = 16, main = "Distances Projected on PCs") 
+contour(a, add = T) # add contour overlay to the PCA plot to visualise the minima
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
